@@ -1,0 +1,122 @@
+
+name: Mobile Codex Fork Debug APK
+
+on:
+  push:
+    branches:
+      - integration/9router-android
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-debug-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-debug:
+    name: Build Mobile Codex Debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout Mobile Codex
+        uses: actions/checkout@v4
+        with:
+          ref: integration/9router-android
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+          cache-dependency-path: |
+            **/*.gradle
+            gradle.properties
+            gradle/wrapper/gradle-wrapper.properties
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.4'
+          cache: npm
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-35 build-tools;35.0.0'
+
+      - name: Install Python build requirements
+        run: |
+          python3 -m pip install -r tools/requirements-devtools.txt
+
+      - name: Restore prepared Android runtime
+        id: prepared
+        uses: actions/cache@v4
+        with:
+          path: |
+            app/src/main/jniLibs/
+            app/src/main/assets/runtime/
+            app/src/main/assets/devtools/
+          key: fork-runtime-v1-${{ runner.os }}-ndk28.2.13676358-${{ hashFiles('tools/runtime-lock.json', 'tools/devtools-lock.json', 'tools/requirements-devtools.txt', 'tools/prepare_runtime.py', 'tools/prepare_devtools.py', 'tools/build_native.py', 'tools/native/**') }}
+
+      - name: Restore runtime download cache
+        if: steps.prepared.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: .runtime-cache
+          key: fork-runtime-inputs-${{ runner.os }}-${{ hashFiles('tools/runtime-lock.json', 'tools/devtools-lock.json', 'tools/requirements-devtools.txt') }}
+          restore-keys: |
+            fork-runtime-inputs-${{ runner.os }}-
+
+      - name: Prepare Android native runtime
+        if: steps.prepared.outputs.cache-hit != 'true'
+        run: |
+          sdkmanager 'ndk;28.2.13676358'
+          python3 tools/prepare_runtime.py
+          python3 tools/build_native.py \
+            --ndk "$ANDROID_HOME/ndk/28.2.13676358"
+          python3 tools/prepare_devtools.py
+
+      - name: Verify prepared runtime
+        run: |
+          python3 tools/prepare_devtools.py --verify
+          test -f app/src/main/assets/devtools/manifest.json
+          PYTHONPATH=tests python3 -m unittest \
+            test_devtools.DevtoolsPackagingTests.test_real_prepared_runtime_contract
+
+      - name: Install Mobile Codex UI dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Test UI logic
+        run: npm test
+
+      - name: Test packaging and source logic
+        run: |
+          python3 -m unittest discover \
+            -s tests \
+            -p 'test_*.py'
+
+      - name: Build Debug APK and run Android checks
+        run: |
+          ./gradlew --no-daemon --build-cache \
+            assembleDebug \
+            testDebugUnitTest \
+            lintDebug
+
+      - name: Verify APK exists
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          ls -lh app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload Mobile Codex Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-codex-baseline-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
