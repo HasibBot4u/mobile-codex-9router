@@ -63,7 +63,7 @@ jobs:
             app/src/main/assets/devtools/
           key: fork-runtime-v1-${{ runner.os }}-ndk30.0.16248370-${{ hashFiles('tools/runtime-lock.json', 'tools/devtools-lock.json', 'tools/requirements-devtools.txt', 'tools/prepare_runtime.py', 'tools/prepare_devtools.py', 'tools/build_native.py', 'tools/native/**') }}
 
-      - name: Restore runtime download cache
+            - name: Restore runtime download cache
         if: steps.prepared.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
@@ -72,25 +72,30 @@ jobs:
           restore-keys: |
             fork-runtime-inputs-${{ runner.os }}-
 
-            - name: Prepare Android native runtime
+      - name: Prepare Android native runtime
         if: steps.prepared.outputs.cache-hit != 'true'
         run: |
+          set -euo pipefail
+
           sdkmanager 'ndk;30.0.16248370'
 
           python3 tools/prepare_runtime.py
 
           NDK_LIB="$ANDROID_HOME/ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
 
+          LLVM_NM="$ANDROID_HOME/ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
+
           test -s "$NDK_LIB"
+          test -x "$LLVM_NM"
 
           echo "Checking required C++ ABI symbol..."
-          "$ANDROID_HOME/ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" -D --defined-only "$NDK_LIB" | grep -F '__hash_memory'
+          "$LLVM_NM" -D --defined-only "$NDK_LIB" | grep -F '__hash_memory'
 
-          echo "Replacing bundled libc++ with NDK r30 libc++..."
+          echo "Replacing bundled libc++..."
           cp "$NDK_LIB" app/src/main/jniLibs/arm64-v8a/libc++_shared.so
 
           echo "Verifying copied libc++..."
-          "$ANDROID_HOME/ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" -D --defined-only app/src/main/jniLibs/arm64-v8a/libc++_shared.so | grep -F '__hash_memory'
+          "$LLVM_NM" -D --defined-only app/src/main/jniLibs/arm64-v8a/libc++_shared.so | grep -F '__hash_memory'
 
           python3 tools/build_native.py \
             --ndk "$ANDROID_HOME/ndk/30.0.16248370"
