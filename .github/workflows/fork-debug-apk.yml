@@ -53,7 +53,7 @@ jobs:
         run: |
           python3 -m pip install -r tools/requirements-devtools.txt
 
-      - name: Restore prepared Android runtime
+                  - name: Restore prepared Android runtime
         id: prepared
         uses: actions/cache@v4
         with:
@@ -61,11 +61,16 @@ jobs:
             app/src/main/jniLibs/
             app/src/main/assets/runtime/
             app/src/main/assets/devtools/
-          key: fork-runtime-v1-${{ runner.os }}-ndk30.0.16248370-${{ hashFiles('tools/runtime-lock.json', 'tools/devtools-lock.json', 'tools/requirements-devtools.txt', 'tools/prepare_runtime.py', 'tools/prepare_devtools.py', 'tools/build_native.py', 'tools/native/**') }}
+          key: fork-runtime-v2-${{ runner.os }}-ndk30.0.16248370-${{ hashFiles('tools/runtime-lock.json', 'tools/devtools-lock.json', 'tools/requirements-devtools.txt', 'tools/prepare_runtime.py', 'tools/prepare_devtools.py', 'tools/build_native.py', 'tools/native/**') }}
 
-            - name: Restore runtime download cache
+      - name: Restore runtime download cache
         if: steps.prepared.outputs.cache-hit != 'true'
         uses: actions/cache@v4
+        with:
+          path: .runtime-cache
+          key: fork-runtime-inputs-${{ runner.os }}-${{ hashFiles('tools/runtime-lock.json', 'tools/devtools-lock.json', 'tools/requirements-devtools.txt') }}
+          restore-keys: |
+            fork-runtime-inputs-${{ runner.os }}-
         with:
           path: .runtime-cache
           key: fork-runtime-inputs-${{ runner.os }}-${{ hashFiles('tools/runtime-lock.json', 'tools/devtools-lock.json', 'tools/requirements-devtools.txt') }}
