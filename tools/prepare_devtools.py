@@ -483,25 +483,93 @@ def open_tar(name: str, data: bytes) -> tarfile.TarFile:
         raise PackagingError(f"cannot read {name}") from error
 
 
+
 def safe_tar_members(archive: tarfile.TarFile) -> Iterable[tarfile.TarInfo]:
+    termux_prefix = TERMUX_PREFIX.decode("ascii").rstrip("/")
+
     for member in archive:
         name = member.name.replace("\\", "/")
         normalized = posixpath.normpath(name)
+
         if member.isdir() and normalized in (".", ""):
             yield member
             continue
-        if not SAFE_MEMBER.fullmatch(name) or normalized in (".", "") or normalized.startswith("../") or name.startswith("/"):
+
+        if (
+            not SAFE_MEMBER.fullmatch(name)
+            or normalized in (".", "")
+            or normalized == ".."
+            or normalized.startswith("../")
+            or name.startswith("/")
+        ):
             raise PackagingError(f"unsafe tar member: {member.name!r}")
+
         if member.islnk() or member.isdev() or member.isfifo():
-            raise PackagingError(f"unsupported tar member type: {member.name!r}")
+            raise PackagingError(
+                f"unsupported tar member type: {member.name!r}"
+            )
+
         if member.issym():
             link = member.linkname.replace("\\", "/")
-            resolved = posixpath.normpath(posixpath.join(posixpath.dirname(normalized), link))
-            if link.startswith("/") or resolved.startswith("../"):
-                raise PackagingError(f"unsafe tar symlink: {member.name!r}")
+
+            # Tar packages may use an absolute Termux prefix path.
+            # Convert only paths inside the exact Termux usr prefix
+            # into a relative path inside the packaged usr directory.
+            if link.startswith("/"):
+                if link == termux_prefix:
+                    target_relative = "."
+                elif link.startswith(termux_prefix + "/"):
+                    target_relative = link[len(termux_prefix) + 1:]
+                else:
+                    raise PackagingError(
+                        f"unsafe tar symlink: {member.name!r}"
+                    )
+
+                target_relative = posixpath.normpath(target_relative)
+
+                if (
+                    target_relative == ".."
+                    or target_relative.startswith("../")
+                    or target_relative.startswith("/")
+                ):
+                    raise PackagingError(
+                        f"unsafe Termux symlink target: {member.name!r}"
+                    )
+
+                source_relative = relative_prefix_path(normalized)
+                source_directory = posixpath.dirname(source_relative) or "."
+
+                # Store a relative target so the Android installer does
+                # not need or create the original Termux absolute path.
+                link = posixpath.relpath(
+                    target_relative,
+                    source_directory
+                )
+                member.linkname = link
+
+            source_relative = relative_prefix_path(normalized)
+            source_directory = posixpath.dirname(source_relative)
+
+            resolved = posixpath.normpath(
+                posixpath.join(source_directory, link)
+            )
+
+            if (
+                resolved == ".."
+                or resolved.startswith("../")
+                or resolved.startswith("/")
+            ):
+                raise PackagingError(
+                    f"unsafe tar symlink: {member.name!r}"
+                )
+
         elif not (member.isfile() or member.isdir()):
-            raise PackagingError(f"unsupported tar member type: {member.name!r}")
+            raise PackagingError(
+                f"unsupported tar member type: {member.name!r}"
+            )
+
         yield member
+
 
 
 def elf_info(data: bytes) -> dict[str, Any] | None:
