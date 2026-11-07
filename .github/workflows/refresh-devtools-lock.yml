@@ -1,11 +1,18 @@
 
 name: Refresh Android Devtools Lock
 
+
 on:
+  push:
+    branches:
+      - integration/9router-android
+    paths:
+      - .github/workflows/refresh-devtools-lock.yml
+      - tools/prepare_devtools.py
+      - tools/devtools-lock.json
+
   workflow_dispatch:
 
-permissions:
-  contents: write
 
 jobs:
   refresh-lock:
