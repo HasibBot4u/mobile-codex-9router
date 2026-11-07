@@ -76,31 +76,83 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+
 def download(url: str, destination: Path, expected_sha256: str | None = None) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists() and (not expected_sha256 or sha256_file(destination) == expected_sha256):
+
+    if destination.exists() and (
+        not expected_sha256
+        or sha256_file(destination) == expected_sha256
+    ):
         return
+
     partial = destination.with_suffix(destination.suffix + ".partial")
     partial.unlink(missing_ok=True)
-    # A pinned package can disappear from the primary pool while a listed mirror still
-    # retains it. Mirrors may only supply the identical bytes from the existing lock.
+
     urls = [url]
+
     if expected_sha256 and url.startswith(POOL_URL):
-        urls.append("https://ro.mirror.flokinet.net/termux/termux-main/" + url[len(POOL_URL):])
-    last_error = None
-    for candidate in urls:
+        relative_path = url[len(POOL_URL):]
+
+        # Official Termux mirrors. A mirror is accepted only
+        # when its downloaded bytes match the pinned SHA-256.
+        mirror_roots = (
+            "https://packages-cf.termux.dev/apt/termux-main/",
+            "https://mirrors.ravidwivedi.in/termux/termux-main/",
+            "https://termux.niranjan.co/termux-main/",
+            "https://mirror.freedif.org/termux/termux-main/",
+            "https://mirror.nag.albony.in/termux/termux-main/",
+            "https://linux.domainesia.com/applications/termux/termux-main/",
+            "https://mirror.freedif.org/termux/termux-main/",
+            "https://mirror.mwt.me/termux/main/",
+            "https://grimler.se/termux/termux-main/",
+            "https://nl.mirror.flokinet.net/termux/termux-main/",
+            "https://ro.mirror.flokinet.net/termux/termux-main/",
+        )
+
+        urls.extend(
+            mirror + relative_path
+            for mirror in mirror_roots
+        )
+
+    failures = []
+
+    for candidate in dict.fromkeys(urls):
         try:
-            with urllib.request.urlopen(candidate, timeout=180) as response, partial.open("wb") as output:
+            with urllib.request.urlopen(
+                candidate,
+                timeout=180
+            ) as response, partial.open("wb") as output:
                 shutil.copyfileobj(response, output)
-            if expected_sha256 and sha256_file(partial) != expected_sha256:
-                raise PackagingError(f"SHA-256 mismatch for {candidate}")
+
+            if expected_sha256:
+                actual_sha256 = sha256_file(partial)
+
+                if actual_sha256 != expected_sha256:
+                    raise PackagingError(
+                        f"SHA-256 mismatch for {candidate}"
+                    )
+
             partial.replace(destination)
             return
-        except (urllib.error.URLError, TimeoutError) as error:
-            last_error = error
+
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            PackagingError,
+        ) as error:
+            failures.append(f"{candidate}: {error}")
+
         finally:
             partial.unlink(missing_ok=True)
-    raise PackagingError(f"Could not download pinned input {url}: {last_error}")
+
+    details = "; ".join(failures[-5:])
+
+    raise PackagingError(
+        f"Could not download pinned input {url}. "
+        f"Attempts: {details}"
+    )
+
 
 
 def parse_control(text: str) -> dict[str, dict[str, str]]:
