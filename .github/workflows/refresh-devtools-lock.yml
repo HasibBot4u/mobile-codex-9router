@@ -1,0 +1,134 @@
+
+name: Refresh Android Devtools Lock
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-lock:
+    name: Regenerate and verify Termux ARM64 package lock
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Mobile Codex
+        uses: actions/checkout@v7
+        with:
+          ref: integration/9router-android
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Regenerate lock from current Termux index
+        run: |
+          rm -rf .runtime-cache
+          python3 tools/prepare_devtools.py --write-lock
+
+      - name: Verify refreshed c-ares package pin
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          lock = json.loads(
+              Path("tools/devtools-lock.json").read_text()
+          )
+
+          package = next(
+              (p for p in lock["packages"] if p["name"] == "c-ares"),
+              None
+          )
+
+          if package is None:
+              raise SystemExit("ERROR: c-ares missing from refreshed lock.")
+
+          print("Version:", package["version"])
+          print("Filename:", package["filename"])
+          print("Architecture:", package["architecture"])
+          print("SHA-256:", package["sha256"])
+
+          if package["version"] == "1.34.8":
+              raise SystemExit(
+                  "ERROR: Current Termux index still returned "
+                  "the unavailable c-ares 1.34.8 package. "
+                  "The old lock will not be accepted."
+              )
+
+          if package["architecture"] != "aarch64":
+              raise SystemExit("ERROR: c-ares is not ARM64.")
+
+          if not package["filename"].endswith("_aarch64.deb"):
+              raise SystemExit("ERROR: Unexpected c-ares archive.")
+
+          if len(package["sha256"]) != 64:
+              raise SystemExit("ERROR: Invalid SHA-256.")
+          PY
+
+      - name: Download and verify c-ares archive
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          from tools.prepare_devtools import (
+              CACHE_DIR,
+              download,
+              read_lock,
+          )
+
+          lock = read_lock()
+
+          package = next(
+              p for p in lock["packages"]
+              if p["name"] == "c-ares"
+          )
+
+          destination = CACHE_DIR / Path(
+              package["filename"]
+          ).name
+
+          url = lock["poolUrl"] + package["filename"]
+
+          download(
+              url,
+              destination,
+              package["sha256"]
+          )
+
+          print("c-ares download successful.")
+          print("Version:", package["version"])
+          print("Verified archive:", destination)
+          print("SHA-256:", package["sha256"])
+          PY
+
+      - name: Prepare refreshed lock artifact
+        run: |
+          cp tools/devtools-lock.json devtools-lock.json
+          test -s devtools-lock.json
+
+      - name: Upload refreshed lock
+        uses: actions/upload-artifact@v7
+        with:
+          name: mobile-codex-refreshed-devtools-lock
+          path: devtools-lock.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Commit refreshed lock to branch
+        continue-on-error: true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add tools/devtools-lock.json
+
+          if git diff --cached --quiet; then
+            echo "Lockfile is already up to date."
+          else
+            git commit -m "build: refresh Termux ARM64 devtools lock"
+            git push origin HEAD:integration/9router-android
+          fi
